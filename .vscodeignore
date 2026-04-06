@@ -1,0 +1,23 @@
+# Source and development files
+.git/**
+.gitignore
+src/**
+test/**
+scripts/**
+docs/**
+
+# Config and meta
+.vscode/**
+.github/**
+*.map
+tsconfig.json
+webpack.config.js
+esbuild.js
+
+# Build artifacts
+dist/**
+node_modules/**
+*.vsix
+
+# Note: README.md, LICENSE.txt, CHANGELOG.md, THIRD_PARTY_NOTICES.md
+# are intentionally included in the package

@@ -1,0 +1,97 @@
+{
+  "name": "onnx-model-inspector",
+  "displayName": "ONNX Model Inspector",
+  "description": "Open ONNX files in a self-contained graph, metadata, and tensor inspector for VS Code and Cursor.",
+  "version": "0.1.0",
+  "publisher": "gema",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JackiMa/onnx-model-inspector"
+  },
+  "homepage": "https://github.com/JackiMa/onnx-model-inspector#readme",
+  "bugs": {
+    "url": "https://github.com/JackiMa/onnx-model-inspector/issues"
+  },
+  "categories": [
+    "Data Science",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "onnx",
+    "metadata",
+    "graph",
+    "model",
+    "inspector",
+    "machine-learning",
+    "deep-learning",
+    "neural-network",
+    "netron",
+    "tensor"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "icon": "images/icon.png",
+  "main": "./extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "onnxInspector.openFile",
+        "title": "ONNX Inspector: Open File"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "onnxInspector.openFile",
+          "when": "resourceExtname == .onnx",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "onnxInspector.openFile",
+          "when": "resourceExtname == .onnx",
+          "group": "navigation"
+        }
+      ]
+    },
+    "customEditors": [
+      {
+        "viewType": "onnxInspector.viewer",
+        "displayName": "ONNX Model Inspector",
+        "selector": [
+          {
+            "filenamePattern": "*.onnx"
+          }
+        ],
+        "priority": "default"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node ./test/run-tests.cjs",
+    "package:vsix": "python3 ./scripts/package_vsix.py",
+    "vsce:package": "vsce package",
+    "vsce:publish": "vsce publish",
+    "ovsx:publish": "ovsx publish"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.0",
+    "ovsx": "^0.9.0"
+  }
+}

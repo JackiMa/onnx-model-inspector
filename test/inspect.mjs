@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+import * as protobuf from '../media/lib/protobuf.mjs';
+import { onnx } from '../media/lib/onnx-proto.mjs';
+const data = fs.readFileSync(new URL('./sample.onnx', import.meta.url));
+const reader = protobuf.BinaryReader.open(new Uint8Array(data));
+const model = onnx.ModelProto.decode(reader);
+console.log('keys', Object.keys(model));
+console.log('metadata_props', model.metadata_props);
+console.log('graph keys', Object.keys(model.graph));
+console.log('graph.input[0]', model.graph.input[0]);
+console.log('graph.initializer[0] keys', Object.keys(model.graph.initializer[0]));
+console.log('node[0]', model.graph.node[0]);

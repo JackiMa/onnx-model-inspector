@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.vsix
+.vscode-test/
+out/
+.DS_Store
+Thumbs.db
+
+# User test models (keep test/sample.onnx for tests)
+/*.onnx
