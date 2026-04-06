@@ -19,5 +19,8 @@ dist/**
 node_modules/**
 *.vsix
 
+# ONNX model files (not needed in extension package)
+*.onnx
+
 # Note: README.md, LICENSE.txt, CHANGELOG.md, THIRD_PARTY_NOTICES.md
 # are intentionally included in the package
