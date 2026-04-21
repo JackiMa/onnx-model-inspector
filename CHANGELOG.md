@@ -1,5 +1,37 @@
 # Changelog
 
+## 6.1.1
+
+### Safety
+
+- `torch.load` now defaults to `weights_only=True`; the legacy unsafe path is only reachable after explicit per-document consent, refuses to run in untrusted workspaces, and requires the new `onnxInspector.allowFullPickleLoad` setting. Adds an output channel ("ONNX Model Inspector") for all safety-relevant events and a command **ONNX Inspector: Reset Load Consent** to revoke prior approvals.
+- Python subprocesses run under a 120s hard timeout (Node-side `execFile` timeout + `SIGKILL`, plus Python-side `signal.alarm` / `threading.Timer` on Windows) and a 16 MB stdout cap.
+- Files larger than 500 MB no longer get fully materialized into the webview payload; the extension now forwards only the path to the Python inspector, which loads via `torch.load(weights_only=True, mmap=True)` when supported (feature probed, not version parsed).
+- Windows Python discovery now tries `py -3` as a real `{command, prefixArgs}` pair instead of a single `"py -3"` string that breaks `execFile`.
+
+### New formats
+
+- Added first-class `.safetensors` support (custom editor, menus, file-open dialog) backed by a standard-library-only header reader with schema validation and a 100 MB header cap.
+- Added a TorchScript offline computation-graph view. When the archive contains `code/`, the extension parses the generated IR source with the standard `ast` module (no `torch` runtime needed) and renders a real operator DAG with layered layout, plus a "Partial TorchScript graph" banner when the AST can only recover a subset of ops.
+- Added a format dispatcher (`scripts/detect_format.py`) that classifies files into `onnx / pt / safetensors / safetensors-index / torchscript / exported-program / full-model-pickle / lightning-checkpoint / optimizer-checkpoint / plain-state-dict / legacy-pickle / unknown` using magic bytes + zip layout + a pickletools shallow scan, never deserializing.
+
+### Graph view for PyTorch
+
+- Completed layer type inference: MultiheadAttention (`in_proj_weight` + `out_proj` sibling), AttentionBlock (q_proj/k_proj/v_proj siblings grouped at parent), DepthwiseConv2d (`weight.shape[1] == 1`), BatchNorm / LayerNorm / GroupNorm / InstanceNorm disambiguation with module-name hints.
+- Each inferred layer now carries a confidence tier (high / medium / low) and optional warnings that surface as a colored badge and a warnings list in the details pane.
+- When a state-dict-only checkpoint is detected, the graph tab shows an ONNX-export wizard card with a copy-ready `torch.onnx.export(..., dynamo=True)` snippet, copied through the host clipboard to bypass webview CSP.
+
+### UI and architecture
+
+- `detectParsedFormat` now uses an explicit whitelist and returns `"unknown"` for unsupported formats, rendering a dedicated error card instead of silently falling through the ONNX branch. Graph SVG `aria-label` and operator-insight rendering are dispatched by format, closing three paths where PT content previously went through the ONNX pipeline.
+- Added `runArchitectureContractTests` that scans the source tree to guard the three fixed leak points and all safety invariants (weights_only default, `--allow-full-load` gate, Windows Python discovery shape, message-protocol parity).
+- Added a three-channel performance baseline (`[perf]`) with a `PERF_GATE=1` mode that fails on >15% regression above a 50 ms absolute floor.
+
+### Internal
+
+- New Python scripts: `scripts/detect_format.py`, `scripts/inspect_safetensors.py`, `scripts/inspect_torchscript.py`. All pure standard library, shipped inside the VSIX.
+- New test fixtures: `test/fixtures/tiny.safetensors`, `test/fixtures/tiny_ts.pt`. Torch is not required to exercise them.
+
 ## 0.6.0
 
 - Added read-only `.pt` and `.pth` checkpoint inspection with tensor, section, and scalar metadata summaries.
