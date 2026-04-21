@@ -1,8 +1,8 @@
 {
   "name": "onnx-model-inspector",
   "displayName": "ONNX Model Inspector",
-  "description": "Open ONNX files in a self-contained graph, metadata, and tensor inspector for VS Code and Cursor.",
-  "version": "0.1.0",
+  "description": "Open ONNX, PT, and PTH model files in a self-contained graph, metadata, and tensor inspector for VS Code and Cursor.",
+  "version": "0.6.0",
   "publisher": "gema",
   "license": "MIT",
   "engines": {
@@ -48,6 +48,16 @@
     }
   },
   "contributes": {
+    "configuration": {
+      "title": "ONNX Model Inspector",
+      "properties": {
+        "onnxInspector.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable used for PT/PTH checkpoint inspection. Leave empty to use ONNX_INSPECTOR_PYTHON, CONDA_PYTHON_EXE, or python3."
+        }
+      }
+    },
     "commands": [
       {
         "command": "onnxInspector.openFile",
@@ -58,14 +68,14 @@
       "explorer/context": [
         {
           "command": "onnxInspector.openFile",
-          "when": "resourceExtname == .onnx",
+          "when": "resourceExtname == .onnx || resourceExtname == .pt || resourceExtname == .pth",
           "group": "navigation"
         }
       ],
       "editor/context": [
         {
           "command": "onnxInspector.openFile",
-          "when": "resourceExtname == .onnx",
+          "when": "resourceExtname == .onnx || resourceExtname == .pt || resourceExtname == .pth",
           "group": "navigation"
         }
       ]
@@ -77,6 +87,12 @@
         "selector": [
           {
             "filenamePattern": "*.onnx"
+          },
+          {
+            "filenamePattern": "*.pt"
+          },
+          {
+            "filenamePattern": "*.pth"
           }
         ],
         "priority": "default"

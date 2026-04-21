@@ -12,6 +12,7 @@ DIST_DIR = PROJECT_ROOT / "dist"
 EXCLUDE_PREFIXES = {
     ".git",
     "dist",
+    "docs/superpowers",
     "__pycache__",
 }
 EXCLUDE_SUFFIXES = {
@@ -23,6 +24,8 @@ EXCLUDE_SUFFIXES = {
 def should_include(path: Path) -> bool:
     relative = path.relative_to(PROJECT_ROOT)
     if any(part in EXCLUDE_PREFIXES for part in relative.parts):
+        return False
+    if relative.as_posix().startswith("docs/superpowers/"):
         return False
     if path.suffix in EXCLUDE_SUFFIXES:
         return False

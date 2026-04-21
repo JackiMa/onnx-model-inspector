@@ -1,6 +1,6 @@
 const vscode = require('vscode');
 const path = require('node:path');
-const { pathToFileURL } = require('node:url');
+const modelParser = require('./model-parser');
 
 const VIEW_TYPE = 'onnxInspector.viewer';
 
@@ -27,7 +27,6 @@ class OnnxInspectorDocument {
 class OnnxInspectorProvider {
     constructor(context) {
         this.context = context;
-        this.parserPromise = undefined;
         this.panelsByResource = new Map();
     }
 
@@ -48,7 +47,7 @@ class OnnxInspectorProvider {
 
     async openCustomDocument(uri, openContext, token) {
         const bytes = openContext.untitledDocumentData || await vscode.workspace.fs.readFile(uri);
-        const parseResult = await this.parseModel(bytes);
+        const parseResult = await this.parseModel(uri, bytes);
         return new OnnxInspectorDocument(uri, bytes, parseResult);
     }
 
@@ -107,15 +106,20 @@ class OnnxInspectorProvider {
 
     async reloadDocument(document) {
         const bytes = await vscode.workspace.fs.readFile(document.uri);
-        const parseResult = await this.parseModel(bytes);
+        const parseResult = await this.parseModel(document.uri, bytes);
         document.update(bytes, parseResult);
     }
 
-    async parseModel(bytes) {
+    async parseModel(uri, bytes) {
         try {
-            const parser = await this.getParser();
-            const parsed = parser.parseOnnxBytes(bytes);
-            return { ok: true, parsed };
+            const configuration = vscode.workspace.getConfiguration('onnxInspector');
+            const pythonPath = configuration.get('pythonPath', '');
+            return await modelParser.parseModelFile({
+                filePath: uri.fsPath,
+                bytes,
+                extensionPath: this.context.extensionPath,
+                pythonPath
+            });
         } catch (error) {
             return {
                 ok: false,
@@ -126,14 +130,6 @@ class OnnxInspectorProvider {
                 }
             };
         }
-    }
-
-    async getParser() {
-        if (!this.parserPromise) {
-            const parserPath = path.join(this.context.extensionPath, 'media', 'lib', 'onnx-parser.mjs');
-            this.parserPromise = import(pathToFileURL(parserPath).href);
-        }
-        return this.parserPromise;
     }
 
     addPanel(document, panel) {
@@ -228,23 +224,23 @@ async function openOnnxInspector(resource) {
     let target = resource;
     if (!target) {
         const activeResource = vscode.window.activeTextEditor?.document?.uri;
-        if (activeResource && activeResource.path.toLowerCase().endsWith('.onnx')) {
+        if (activeResource && modelParser.detectModelFormat(activeResource.fsPath) !== 'unknown') {
             target = activeResource;
         }
     }
     if (!target) {
         const picked = await vscode.window.showOpenDialog({
             canSelectMany: false,
-            filters: { ONNX: ['onnx'] },
-            openLabel: 'Open in ONNX Inspector'
+            filters: { Models: ['onnx', 'pt', 'pth'] },
+            openLabel: 'Open in Model Inspector'
         });
         target = picked?.[0];
     }
     if (!target) {
         return;
     }
-    if (!target.path.toLowerCase().endsWith('.onnx')) {
-        vscode.window.showErrorMessage('ONNX Inspector can only open files with the .onnx extension.');
+    if (modelParser.detectModelFormat(target.fsPath) === 'unknown') {
+        vscode.window.showErrorMessage('ONNX Inspector can only open .onnx, .pt, or .pth files.');
         return;
     }
     await vscode.commands.executeCommand('vscode.openWith', target, VIEW_TYPE);

@@ -2,19 +2,21 @@
 
 ## Design goal
 
-The main requirement for this build was: **install once, then open ONNX files immediately**.
+The main requirement for this build was: **install once, then open model artifacts immediately**.
 
 That led to three design choices:
 
-1. **No Python runtime dependency at extension runtime**
+1. **No Python runtime dependency for ONNX inspection**
 2. **No external Netron service or desktop app dependency**
 3. **No network fetches from inside the extension**
+
+PT / PTH support is a deliberate exception to the first point: checkpoint inspection shells out to a local Python + PyTorch runtime when available, because those formats are PyTorch-native rather than protobuf-native.
 
 ## Runtime architecture
 
 ### 1. Custom readonly editor
 
-The extension registers a custom readonly editor for `*.onnx` files.
+The extension registers a custom readonly editor for `*.onnx`, `*.pt`, and `*.pth` files.
 
 That means opening a model launches a purpose-built webview instead of a generic binary editor.
 
@@ -24,14 +26,42 @@ The extension host does the parsing work.
 
 Flow:
 
-1. VS Code / Cursor asks the provider to open the ONNX file.
+1. VS Code / Cursor asks the provider to open the model file.
 2. The extension reads raw bytes through the workspace file system API.
 3. The extension also reads basic file stats such as `ctime`, `mtime`, and file size.
-4. A bundled ONNX protobuf decoder parses the `ModelProto` payload.
-5. The extension converts the decoded structure into a simplified, serializable inspection model.
-6. The webview receives that inspection model and renders it.
+4. If the file is ONNX, a bundled ONNX protobuf decoder parses the `ModelProto` payload.
+5. If the file is PT / PTH, the extension invokes `scripts/inspect_pt.py`, which uses local PyTorch to load the checkpoint on CPU and summarize its structure.
+6. The extension converts the decoded structure into a simplified, serializable inspection model.
+7. The webview receives that inspection model and renders it.
 
 This keeps the webview simple and avoids shipping raw file bytes into the browser UI.
+
+### 3. Format-dependent output
+
+- **ONNX** produces the full graph-oriented inspection model.
+- **PT / PTH** produces a summary-oriented inspection model: checkpoint sections, scalar metadata, and tensor entries.
+
+The PT path intentionally does not attempt to reconstruct a computation graph in V1.
+
+### 4. Safety and limitations of PT inspection
+
+The PT helper loads checkpoints via local PyTorch and walks the resulting object tree to extract:
+
+- mapping / sequence sections
+- scalar metadata values
+- tensor names, dtypes, shapes, element counts, and estimated byte sizes
+
+This path is meant for trusted local artifacts. PT / PTH formats are not as structurally self-describing as ONNX, so the extension focuses on summary inspection rather than general object introspection or graph reconstruction.
+
+If Python or PyTorch is unavailable, PT inspection fails with a structured error shown in the editor.
+
+The Python executable for PT inspection is resolved in this order:
+1. `onnxInspector.pythonPath` setting
+2. `ONNX_INSPECTOR_PYTHON`
+3. `CONDA_PYTHON_EXE`
+4. `python3`
+
+If `onnxInspector.pythonPath` contains `${workspaceFolder}`, it is expanded relative to the current workspace.
 
 ## Bundled parser and layout runtime
 

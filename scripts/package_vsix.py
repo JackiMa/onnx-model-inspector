@@ -22,10 +22,12 @@ DIST_DIR = PROJECT_ROOT / "dist"
 RUNTIME_FILES = [
     "package.json",
     "extension.js",
+    "model-parser.js",
     "README.md",
     "CHANGELOG.md",
     "LICENSE.txt",
     "THIRD_PARTY_NOTICES.md",
+    "scripts/inspect_pt.py",
 ]
 
 RUNTIME_DIRS = [
@@ -80,7 +82,13 @@ def gather_files() -> list[Path]:
         base = PROJECT_ROOT / relative_dir
         if not base.exists():
             continue
-        files.extend(sorted(path for path in base.rglob("*") if path.is_file()))
+        files.extend(
+            sorted(
+                path
+                for path in base.rglob("*")
+                if path.is_file() and "superpowers" not in path.relative_to(PROJECT_ROOT).parts
+            )
+        )
     return files
 
 

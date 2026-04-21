@@ -218,6 +218,56 @@ button {
     justify-content: center;
     gap: 16px;
     height: 100%;
+}
+
+.pt-graph-placeholder {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-start;
+    justify-content: center;
+    min-height: 240px;
+    padding: 24px;
+}
+
+.pt-graph-placeholder h2 {
+    margin: 0;
+}
+
+.metadata-preview-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.metadata-value-preview {
+    max-width: 45%;
+    text-align: right;
+    color: var(--foreground-muted);
+    word-break: break-word;
+}
+
+.metadata-key {
+    word-break: break-word;
+}
+
+.metadata-preview-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.io-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.empty-state.compact {
+    min-height: 80px;
+    justify-content: flex-start;
+    padding: 12px 0;
+    height: auto;
     min-height: 220px;
     color: var(--foreground-muted);
     text-align: center;

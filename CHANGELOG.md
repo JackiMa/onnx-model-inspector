@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- Added read-only `.pt` and `.pth` checkpoint inspection with tensor, section, and scalar metadata summaries.
+- Added configurable Python executable resolution for PT / PTH inspection through `onnxInspector.pythonPath`, `ONNX_INSPECTOR_PYTHON`, `CONDA_PYTHON_EXE`, then `python3`.
+- Updated the inspector UI and docs to distinguish full ONNX graph inspection from PT / PTH summary-only inspection.
+- Fixed VSIX packaging so the PT parser bridge and bundled Python helper are included while internal implementation plans stay out of release artifacts.
+
 ## 0.5.2
 
 - Fixed the remaining graph-selection navigation bug that could reset the view to the top after selecting certain blocks. The inspector now preserves both the outer tab scroll position and the inner graph viewport when you click a node directly in the graph.

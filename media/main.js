@@ -476,6 +476,21 @@ function getParsed() {
 }
 
 function getCombinedMetadataEntries(parsed) {
+    const format = detectParsedFormat(parsed);
+    if (format === 'pt') {
+        return [
+            ...(parsed.metadata || []).map((entry, index) => ({
+                ...entry,
+                id: `scalar:${index}:${entry.key}`,
+                scope: 'scalar'
+            })),
+            ...(parsed.graphMetadata || []).map((entry, index) => ({
+                ...entry,
+                id: `section:${index}:${entry.key}`,
+                scope: 'section'
+            }))
+        ];
+    }
     return [
         ...(parsed.metadata || []).map((entry, index) => ({
             ...entry,
@@ -488,6 +503,14 @@ function getCombinedMetadataEntries(parsed) {
             scope: 'graph'
         }))
     ];
+}
+
+function detectParsedFormat(parsed) {
+    return parsed?.format === 'pt' ? 'pt' : 'onnx';
+}
+
+function isPtModel(parsed) {
+    return detectParsedFormat(parsed) === 'pt';
 }
 
 function syncGraphSelectionToSearch() {
@@ -565,11 +588,13 @@ function render() {
 }
 
 function renderLoading(message) {
+    const format = state.modelData?.parseResult?.format || detectParsedFormat(state.modelData?.parseResult?.parsed);
+    const label = format === 'pt' ? 'Loading PyTorch checkpoint…' : 'Loading ONNX model…';
     return `
         <div class="loading-state">
             <div class="spinner"></div>
             <div>
-                <div class="loading-title">Loading ONNX model…</div>
+                <div class="loading-title">${escapeHtml(label)}</div>
                 <div class="loading-subtitle">${escapeHtml(message)}</div>
             </div>
         </div>
@@ -608,19 +633,29 @@ function renderError(modelData) {
 
 function renderHeader(parsed) {
     const summary = parsed.summary;
+    const format = detectParsedFormat(parsed);
     const primaryTemporal = summary.temporalMetadata?.primary || null;
     const fileStat = state.modelData.fileStat || {};
+    const titleBadge = format === 'pt'
+        ? renderBadge(summary.graphName ? `Checkpoint: ${summary.graphName}` : 'PyTorch checkpoint')
+        : renderBadge(summary.graphName ? `Graph: ${summary.graphName}` : 'Unnamed graph');
+    const formatBadge = format === 'pt'
+        ? renderBadge(`PyTorch ${escapeHtml(summary.producerVersion || 'checkpoint')}`)
+        : renderBadge(`IR ${escapeHtml(summary.irVersion || '—')}${summary.irVersionLabel ? ` · ${escapeHtml(summary.irVersionLabel)}` : ''}`);
+    const countBadge = format === 'pt'
+        ? renderBadge(`${summary.stats.initializerCount} tensor${summary.stats.initializerCount === 1 ? '' : 's'}`)
+        : renderBadge(`${summary.stats.nodeCount} node${summary.stats.nodeCount === 1 ? '' : 's'}`);
     return `
         <div class="header-card">
             <div class="header-main">
-                <div class="eyebrow">ONNX Model Inspector</div>
+                <div class="eyebrow">${format === 'pt' ? 'PyTorch Checkpoint Inspector' : 'ONNX Model Inspector'}</div>
                 <h1 class="title-row">${escapeHtml(state.modelData.fileName)}</h1>
                 <div class="subtle-path">${escapeHtml(state.modelData.displayPath || state.modelData.uri)}</div>
                 <div class="badge-row">
-                    ${renderBadge(summary.graphName ? `Graph: ${summary.graphName}` : 'Unnamed graph')}
-                    ${renderBadge(`IR ${escapeHtml(summary.irVersion || '—')}${summary.irVersionLabel ? ` · ${escapeHtml(summary.irVersionLabel)}` : ''}`)}
+                    ${titleBadge}
+                    ${formatBadge}
                     ${renderBadge(summary.fileSizeLabel || formatBytes(state.modelData.byteLength || 0))}
-                    ${renderBadge(`${summary.stats.nodeCount} node${summary.stats.nodeCount === 1 ? '' : 's'}`)}
+                    ${countBadge}
                     ${renderBadge(`${summary.stats.metadataCount + summary.stats.graphMetadataCount} metadata item${summary.stats.metadataCount + summary.stats.graphMetadataCount === 1 ? '' : 's'}`)}
                     ${primaryTemporal ? renderBadge(`Exported ${formatTimestamp(primaryTemporal.isoValue)}`) : ''}
                 </div>
@@ -671,6 +706,7 @@ function renderActiveTab(parsed) {
 
 function renderOverviewTab(parsed) {
     const summary = parsed.summary;
+    const format = detectParsedFormat(parsed);
     const producer = [summary.producerName, summary.producerVersion].filter(Boolean).join(' ');
     const fileStat = state.modelData.fileStat || {};
     const temporal = summary.temporalMetadata || { primary: null, candidates: [] };
@@ -679,12 +715,12 @@ function renderOverviewTab(parsed) {
             <div class="panel-card">
                 <h2>Summary</h2>
                 <div class="stats-grid">
-                    ${renderStatCard('Nodes', summary.stats.nodeCount)}
-                    ${renderStatCard('Inputs', summary.stats.inputCount)}
-                    ${renderStatCard('Outputs', summary.stats.outputCount)}
+                    ${format === 'pt' ? renderStatCard('Checkpoint sections', (parsed.checkpointSections || []).length) : renderStatCard('Nodes', summary.stats.nodeCount)}
+                    ${format === 'pt' ? renderStatCard('Tensor entries', summary.stats.initializerCount) : renderStatCard('Inputs', summary.stats.inputCount)}
+                    ${format === 'pt' ? renderStatCard('Scalar metadata', summary.stats.metadataCount) : renderStatCard('Outputs', summary.stats.outputCount)}
                     ${renderStatCard('Initializers', summary.stats.initializerCount)}
                     ${renderStatCard('Value Info', summary.stats.valueInfoCount)}
-                    ${renderStatCard('Merged Constants', parsed.graphView?.stats?.collapsedConstantCount || 0)}
+                    ${format === 'pt' ? renderStatCard('Root type', summary.graphName || '—') : renderStatCard('Merged Constants', parsed.graphView?.stats?.collapsedConstantCount || 0)}
                     ${renderStatCard('Estimated Parameters', summary.stats.estimatedParameterBytesLabel)}
                 </div>
             </div>
@@ -725,18 +761,53 @@ function renderOverviewTab(parsed) {
                 ` : `<div class="subtle-meta">No obvious generated/exported timestamp was detected inside the ONNX metadata fields.</div>`}
             </div>
             <div class="panel-card">
-                <h2>Metadata overview</h2>
-                ${renderMetadataPreview(parsed)}
+                <h2>${format === 'pt' ? 'Checkpoint overview' : 'Metadata overview'}</h2>
+                ${format === 'pt' ? renderCheckpointSectionPreview(parsed) : renderMetadataPreview(parsed)}
             </div>
             <div class="panel-card overview-wide-card">
-                <h2>Top graph nodes</h2>
+                <h2>${format === 'pt' ? 'Tensor preview' : 'Top graph nodes'}</h2>
+                ${format === 'pt' ? renderCheckpointTensorPreview(parsed) : `
                 <div class="chip-list">
                     ${(parsed.nodes || []).slice(0, 18).map((node) => `
                         <button class="chip-button" data-action="open-graph-node" data-node-id="${escapeAttribute(node.id)}" title="Open graph view and inspect ${escapeHtml(node.displayName)}">${escapeHtml(node.displayName)}</button>
                     `).join('')}
                     ${(parsed.nodes || []).length > 18 ? `<span class="subtle-meta">+${parsed.nodes.length - 18} more</span>` : ''}
-                </div>
+                </div>`}
             </div>
+        </div>
+    `;
+}
+
+function renderCheckpointSectionPreview(parsed) {
+    const sections = parsed.checkpointSections || [];
+    if (!sections.length) {
+        return `<div class="empty-state compact">No checkpoint sections were discovered.</div>`;
+    }
+    return `
+        <div class="metadata-preview-list">
+            ${sections.slice(0, 8).map((section) => `
+                <div class="metadata-preview-item">
+                    <div>
+                        <div class="section-label">${escapeHtml(section.kind)}</div>
+                        <div class="metadata-key">${escapeHtml(section.path)}</div>
+                    </div>
+                    <div class="metadata-value-preview">${escapeHtml(section.summary || '—')}</div>
+                </div>
+            `).join('')}
+            ${sections.length > 8 ? `<div class="subtle-meta">Open the Metadata tab to inspect all ${sections.length} sections.</div>` : ''}
+        </div>
+    `;
+}
+
+function renderCheckpointTensorPreview(parsed) {
+    const tensors = parsed.initializers || [];
+    if (!tensors.length) {
+        return `<div class="empty-state compact">No tensor entries were discovered in this checkpoint.</div>`;
+    }
+    return `
+        <div class="chip-list">
+            ${tensors.slice(0, 12).map((tensor) => `<span class="pill monospace">${escapeHtml(tensor.name)} · ${escapeHtml(tensor.shapeSummary || 'scalar')}</span>`).join('')}
+            ${tensors.length > 12 ? `<span class="subtle-meta">+${tensors.length - 12} more</span>` : ''}
         </div>
     `;
 }
@@ -763,6 +834,16 @@ function renderMetadataPreview(parsed) {
 }
 
 function renderGraphTab(parsed) {
+    const format = detectParsedFormat(parsed);
+    if (format === 'pt') {
+        return `
+            <div class="panel-card pt-graph-placeholder">
+                <h2>Graph view unavailable for PT checkpoints</h2>
+                <div class="subtle-meta">V1 PT support is summary-only. Use Metadata and I/O & Weights to inspect sections, tensors, and scalar values.</div>
+            </div>
+        `;
+    }
+
     const graphView = parsed.graphView;
     const nodes = graphView.displayNodes || [];
     const query = state.graphSearch.trim().toLowerCase();
@@ -1629,6 +1710,7 @@ function edgeLabelPoint(points) {
 }
 
 function renderMetadataTab(parsed) {
+    const format = detectParsedFormat(parsed);
     const allEntries = getCombinedMetadataEntries(parsed);
     const query = state.metadataSearch.trim().toLowerCase();
     const entries = query
@@ -1662,8 +1744,8 @@ function renderMetadataTab(parsed) {
             <div class="panel-card metadata-panel">
                 <div class="panel-toolbar">
                     <div>
-                        <h2>Metadata detail</h2>
-                        <div class="subtle-meta">Model-level and graph-level metadata from the ONNX container.</div>
+                        <h2>${format === 'pt' ? 'Checkpoint detail' : 'Metadata detail'}</h2>
+                        <div class="subtle-meta">${format === 'pt' ? 'Checkpoint sections and scalar metadata extracted from the PT container.' : 'Model-level and graph-level metadata from the ONNX container.'}</div>
                     </div>
                     ${selectedEntry ? `
                         <div class="toolbar-actions">
@@ -1676,7 +1758,7 @@ function renderMetadataTab(parsed) {
                 </div>
                 ${selectedEntry ? `
                     <div class="metadata-detail-grid">
-                        ${renderKvCard('Scope', selectedEntry.scope)}
+                        ${renderKvCard(format === 'pt' ? 'Section' : 'Scope', selectedEntry.scope)}
                         ${renderKvCard('Key', selectedEntry.key)}
                     </div>
                     ${selectedEntry.isJson ? `
@@ -1808,32 +1890,34 @@ function roundedPolylinePath(points, radius = 8) {
 }
 
 function renderIoTab(parsed) {
+    const format = detectParsedFormat(parsed);
     const query = state.ioSearch.trim().toLowerCase();
     const filterItems = (items, getter) => query ? items.filter((item) => getter(item).includes(query)) : items;
     const inputs = filterItems(parsed.inputs || [], (item) => `${item.name} ${item.typeSummary}`.toLowerCase());
     const outputs = filterItems(parsed.outputs || [], (item) => `${item.name} ${item.typeSummary}`.toLowerCase());
     const initializers = filterItems(parsed.initializers || [], (item) => `${item.name} ${item.dataTypeName} ${item.shapeSummary}`.toLowerCase());
     const valueInfos = filterItems(parsed.valueInfos || [], (item) => `${item.name} ${item.typeSummary}`.toLowerCase());
+    const sections = filterItems(parsed.checkpointSections || [], (item) => `${item.path} ${item.kind} ${item.summary}`.toLowerCase());
 
     return `
         <div class="panel-card">
             <div class="panel-toolbar">
                 <div>
-                    <h2>Inputs, outputs, and weights</h2>
-                    <div class="subtle-meta">Filter by name, shape, or data type.</div>
+                    <h2>${format === 'pt' ? 'Tensor and checkpoint contents' : 'Inputs, outputs, and weights'}</h2>
+                    <div class="subtle-meta">${format === 'pt' ? 'Filter checkpoint sections and discovered tensors by name, shape, or data type.' : 'Filter by name, shape, or data type.'}</div>
                 </div>
                 <input
                     class="search-input compact"
                     type="text"
-                    placeholder="Filter I/O and weights"
+                    placeholder="${format === 'pt' ? 'Filter sections and tensors' : 'Filter I/O and weights'}"
                     value="${escapeAttribute(state.ioSearch)}"
                     data-role="io-search" />
             </div>
             <div class="io-sections">
-                ${renderValueInfoSection('Inputs', inputs, ['Name', 'Type', 'Metadata'], (item) => [item.name, item.typeSummary, `${item.metadata.length}`])}
-                ${renderValueInfoSection('Outputs', outputs, ['Name', 'Type', 'Metadata'], (item) => [item.name, item.typeSummary, `${item.metadata.length}`])}
-                ${renderValueInfoSection('Initializers / Weights', initializers, ['Name', 'Type', 'Shape', 'Elements', 'Estimated size', 'Storage'], (item) => [item.name, item.dataTypeName, item.shapeSummary || '—', item.elementCount, item.estimatedBytes, item.storage.summary])}
-                ${renderValueInfoSection('Value Info', valueInfos, ['Name', 'Type', 'Metadata'], (item) => [item.name, item.typeSummary, `${item.metadata.length}`])}
+                ${format === 'pt' ? renderValueInfoSection('Checkpoint sections', sections, ['Path', 'Kind', 'Summary', 'Entries'], (item) => [item.path, item.kind, item.summary || '—', item.entryCount ?? '—']) : renderValueInfoSection('Inputs', inputs, ['Name', 'Type', 'Metadata'], (item) => [item.name, item.typeSummary, `${item.metadata.length}`])}
+                ${format === 'pt' ? renderValueInfoSection('Tensor entries', initializers, ['Name', 'Type', 'Shape', 'Elements', 'Estimated size', 'Storage'], (item) => [item.name, item.dataTypeName, item.shapeSummary || '—', item.elementCount, item.estimatedBytes, item.storage.summary]) : renderValueInfoSection('Outputs', outputs, ['Name', 'Type', 'Metadata'], (item) => [item.name, item.typeSummary, `${item.metadata.length}`])}
+                ${format === 'pt' ? renderValueInfoSection('Scalar metadata', parsed.metadata || [], ['Path', 'Value'], (item) => [item.key, item.value || '']) : renderValueInfoSection('Initializers / Weights', initializers, ['Name', 'Type', 'Shape', 'Elements', 'Estimated size', 'Storage'], (item) => [item.name, item.dataTypeName, item.shapeSummary || '—', item.elementCount, item.estimatedBytes, item.storage.summary])}
+                ${format === 'pt' ? '' : renderValueInfoSection('Value Info', valueInfos, ['Name', 'Type', 'Metadata'], (item) => [item.name, item.typeSummary, `${item.metadata.length}`])}
             </div>
         </div>
     `;
@@ -1903,6 +1987,8 @@ function captureGraphViewportFromDom() {
     }
     state.graphScrollLeft = container.scrollLeft;
     state.graphScrollTop = container.scrollTop;
+    state.graphViewportInitialized = true;
+    graphInitialFitPending = false;
 }
 
 function afterGraphRender(parsed) {
