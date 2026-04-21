@@ -3,6 +3,21 @@ const path = require('node:path');
 const modelParser = require('./model-parser');
 
 const VIEW_TYPE = 'onnxInspector.viewer';
+const LARGE_FILE_THRESHOLD_BYTES = 500 * 1024 * 1024;
+
+let sharedOutputChannel = null;
+
+function getOutputChannel() {
+    if (!sharedOutputChannel) {
+        sharedOutputChannel = vscode.window.createOutputChannel('ONNX Model Inspector');
+    }
+    return sharedOutputChannel;
+}
+
+function logDiagnostic(message) {
+    const timestamp = new Date().toISOString();
+    getOutputChannel().appendLine(`[${timestamp}] ${message}`);
+}
 
 class OnnxInspectorDocument {
     constructor(uri, bytes, parseResult) {
@@ -28,6 +43,7 @@ class OnnxInspectorProvider {
     constructor(context) {
         this.context = context;
         this.panelsByResource = new Map();
+        this.consentByUri = new Map();
     }
 
     static register(context) {
@@ -46,9 +62,33 @@ class OnnxInspectorProvider {
     }
 
     async openCustomDocument(uri, openContext, token) {
-        const bytes = openContext.untitledDocumentData || await vscode.workspace.fs.readFile(uri);
+        const bytes = await this.readFileBytes(uri, openContext);
         const parseResult = await this.parseModel(uri, bytes);
         return new OnnxInspectorDocument(uri, bytes, parseResult);
+    }
+
+    async readFileBytes(uri, openContext) {
+        if (openContext?.untitledDocumentData) {
+            return openContext.untitledDocumentData;
+        }
+        // ONNX is parsed in-process from bytes, so we must always read it
+        // regardless of size. PT and safetensors are handled by a Python
+        // subprocess that reads from disk directly; for those we can skip the
+        // full-read when the file is large to keep the webview payload small.
+        const format = modelParser.detectModelFormat(uri.fsPath);
+        const subprocessBacked = format === 'pt' || format === 'safetensors';
+        if (subprocessBacked) {
+            try {
+                const stat = await vscode.workspace.fs.stat(uri);
+                if (stat.size > LARGE_FILE_THRESHOLD_BYTES) {
+                    logDiagnostic(`Skipping webview-payload read for large ${format} file (${stat.size} bytes): ${uri.fsPath}`);
+                    return new Uint8Array();
+                }
+            } catch {
+                // ignore stat failure, let readFile fail meaningfully
+            }
+        }
+        return await vscode.workspace.fs.readFile(uri);
     }
 
     async resolveCustomEditor(document, webviewPanel, token) {
@@ -73,7 +113,8 @@ class OnnxInspectorProvider {
                         await this.reloadDocument(document);
                         this.broadcastDocumentState(document);
                         break;
-                    case 'copyText': {
+                    case 'copyText':
+                    case 'copyToClipboard': {
                         const text = typeof message?.payload?.text === 'string' ? message.payload.text : '';
                         if (text) {
                             await vscode.env.clipboard.writeText(text);
@@ -88,10 +129,16 @@ class OnnxInspectorProvider {
                         }
                         break;
                     }
+                    case 'requestFullLoadConsent': {
+                        await this.handleFullLoadConsentRequest(document);
+                        this.broadcastDocumentState(document);
+                        break;
+                    }
                     default:
                         break;
                 }
             } catch (error) {
+                logDiagnostic(`Message handler error: ${error?.stack || error}`);
                 vscode.window.showErrorMessage(`ONNX Inspector: ${error?.message || String(error)}`);
             }
         });
@@ -105,22 +152,73 @@ class OnnxInspectorProvider {
     }
 
     async reloadDocument(document) {
-        const bytes = await vscode.workspace.fs.readFile(document.uri);
+        const bytes = await this.readFileBytes(document.uri);
         const parseResult = await this.parseModel(document.uri, bytes);
         document.update(bytes, parseResult);
     }
 
-    async parseModel(uri, bytes) {
+    async handleFullLoadConsentRequest(document) {
+        const uriKey = document.uri.toString();
+        const currentState = this.consentByUri.get(uriKey);
+        if (currentState === 'denied') {
+            logDiagnostic(`Full-load consent previously denied for ${document.uri.fsPath}; not reprompting. Use command "ONNX Inspector: Reset Load Consent" to retry.`);
+            return;
+        }
+        if (!vscode.workspace.isTrusted) {
+            vscode.window.showErrorMessage('ONNX Inspector: this workspace is untrusted. Full (unsafe) pickle deserialization is disabled by policy. Trust the workspace to enable.');
+            logDiagnostic(`Full-load blocked in untrusted workspace: ${document.uri.fsPath}`);
+            return;
+        }
+        const settings = vscode.workspace.getConfiguration('onnxInspector');
+        if (!settings.get('allowFullPickleLoad', false)) {
+            vscode.window.showErrorMessage('ONNX Inspector: full pickle load is disabled. Enable "onnxInspector.allowFullPickleLoad" in settings if you trust this checkpoint source.');
+            logDiagnostic(`Full-load blocked by setting: ${document.uri.fsPath}`);
+            return;
+        }
+        const choice = await vscode.window.showWarningMessage(
+            'This checkpoint failed safe (weights_only) load. Loading it requires unsafe pickle deserialization, which can execute arbitrary Python code. Only continue if you trust the source.',
+            { modal: true },
+            'Allow once',
+            'Cancel'
+        );
+        if (choice !== 'Allow once') {
+            this.consentByUri.set(uriKey, 'denied');
+            logDiagnostic(`User denied full-load consent for ${document.uri.fsPath}`);
+            return;
+        }
+        this.consentByUri.set(uriKey, 'allowed');
+        logDiagnostic(`User granted one-shot full-load consent for ${document.uri.fsPath}`);
+        const bytes = await this.readFileBytes(document.uri);
+        const parseResult = await this.parseModel(document.uri, bytes, { allowFullLoad: true });
+        document.update(bytes, parseResult);
+    }
+
+    resetConsent(uri) {
+        if (uri) {
+            this.consentByUri.delete(uri.toString());
+        } else {
+            this.consentByUri.clear();
+        }
+    }
+
+    async parseModel(uri, bytes, { allowFullLoad = false } = {}) {
         try {
             const configuration = vscode.workspace.getConfiguration('onnxInspector');
             const pythonPath = configuration.get('pythonPath', '');
-            return await modelParser.parseModelFile({
+            const effectiveAllow = allowFullLoad && vscode.workspace.isTrusted && configuration.get('allowFullPickleLoad', false);
+            const result = await modelParser.parseModelFile({
                 filePath: uri.fsPath,
                 bytes,
                 extensionPath: this.context.extensionPath,
-                pythonPath
+                pythonPath,
+                allowFullLoad: effectiveAllow
             });
+            if (result?.requiresFullLoad) {
+                logDiagnostic(`Safe load failed; checkpoint requires full load: ${uri.fsPath} (${result.safeLoadError || 'no detail'})`);
+            }
+            return result;
         } catch (error) {
+            logDiagnostic(`Parse error for ${uri.fsPath}: ${error?.stack || error}`);
             return {
                 ok: false,
                 error: {
@@ -209,7 +307,7 @@ class OnnxInspectorProvider {
         <div class="loading-state">
             <div class="spinner"></div>
             <div>
-                <div class="loading-title">Loading ONNX model…</div>
+                <div class="loading-title">Loading model…</div>
                 <div class="loading-subtitle">Parsing graph, metadata, and tensor summaries.</div>
             </div>
         </div>
@@ -231,7 +329,7 @@ async function openOnnxInspector(resource) {
     if (!target) {
         const picked = await vscode.window.showOpenDialog({
             canSelectMany: false,
-            filters: { Models: ['onnx', 'pt', 'pth'] },
+            filters: { Models: ['onnx', 'pt', 'pth', 'safetensors'] },
             openLabel: 'Open in Model Inspector'
         });
         target = picked?.[0];
@@ -240,7 +338,7 @@ async function openOnnxInspector(resource) {
         return;
     }
     if (modelParser.detectModelFormat(target.fsPath) === 'unknown') {
-        vscode.window.showErrorMessage('ONNX Inspector can only open .onnx, .pt, or .pth files.');
+        vscode.window.showErrorMessage('ONNX Inspector can only open .onnx, .pt, .pth, or .safetensors files.');
         return;
     }
     await vscode.commands.executeCommand('vscode.openWith', target, VIEW_TYPE);
@@ -256,13 +354,23 @@ function getNonce() {
 }
 
 function activate(context) {
-    const { registration } = OnnxInspectorProvider.register(context);
+    const { provider, registration } = OnnxInspectorProvider.register(context);
     context.subscriptions.push(registration);
     context.subscriptions.push(vscode.commands.registerCommand('onnxInspector.openFile', openOnnxInspector));
+    context.subscriptions.push(vscode.commands.registerCommand('onnxInspector.resetLoadConsent', async () => {
+        provider.resetConsent();
+        vscode.window.showInformationMessage('ONNX Inspector: load consent state cleared.');
+    }));
+    if (sharedOutputChannel) {
+        context.subscriptions.push(sharedOutputChannel);
+    }
 }
 
 function deactivate() {
-    // no-op
+    if (sharedOutputChannel) {
+        sharedOutputChannel.dispose();
+        sharedOutputChannel = null;
+    }
 }
 
 module.exports = {

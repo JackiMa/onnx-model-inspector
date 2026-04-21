@@ -1515,3 +1515,76 @@ button {
     font-size: 10px;
     font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, monospace);
 }
+
+.onnx-export-wizard {
+    margin-bottom: 16px;
+    border-left: 3px solid color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.onnx-export-wizard pre.code-snippet {
+    background: color-mix(in srgb, var(--foreground) 6%, transparent);
+    padding: 12px 14px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.5;
+    margin: 10px 0;
+}
+
+.onnx-export-wizard pre.code-snippet code {
+    font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, monospace);
+}
+
+.onnx-export-wizard .wizard-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.insight-card .insight-section-label {
+    margin-top: 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--foreground-muted);
+}
+
+.insight-card ul.insight-bullets {
+    margin: 4px 0 6px 14px;
+    padding: 0;
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+
+.confidence-badge {
+    display: inline-block;
+    font-size: 10.5px;
+    padding: 1px 6px;
+    margin-left: 6px;
+    border-radius: 10px;
+    vertical-align: middle;
+    background: color-mix(in srgb, var(--foreground) 12%, transparent);
+    color: var(--foreground-muted);
+}
+
+.confidence-badge.confidence-high {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--accent);
+}
+
+.confidence-badge.confidence-medium {
+    background: color-mix(in srgb, var(--warning, goldenrod) 18%, transparent);
+}
+
+.confidence-badge.confidence-low {
+    background: color-mix(in srgb, var(--error, #d06e6e) 18%, transparent);
+}
+
+.insight-warnings {
+    margin: 6px 0 2px 14px;
+    padding: 0;
+    font-size: 12px;
+    color: var(--foreground-muted);
+}

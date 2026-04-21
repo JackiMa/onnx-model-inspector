@@ -5,6 +5,9 @@ src/**
 test/**
 scripts/**
 !scripts/inspect_pt.py
+!scripts/inspect_safetensors.py
+!scripts/inspect_torchscript.py
+!scripts/detect_format.py
 docs/**
 
 # Config and meta

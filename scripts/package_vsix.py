@@ -28,6 +28,9 @@ RUNTIME_FILES = [
     "LICENSE.txt",
     "THIRD_PARTY_NOTICES.md",
     "scripts/inspect_pt.py",
+    "scripts/inspect_safetensors.py",
+    "scripts/inspect_torchscript.py",
+    "scripts/detect_format.py",
 ]
 
 RUNTIME_DIRS = [

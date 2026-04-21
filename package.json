@@ -54,7 +54,12 @@
         "onnxInspector.pythonPath": {
           "type": "string",
           "default": "",
-          "description": "Python executable used for PT/PTH checkpoint inspection. Leave empty to use ONNX_INSPECTOR_PYTHON, CONDA_PYTHON_EXE, or python3."
+          "description": "Python executable used for PT/PTH checkpoint inspection. Leave empty to use ONNX_INSPECTOR_PYTHON, CONDA_PYTHON_EXE, py -3 (Windows), or python3."
+        },
+        "onnxInspector.allowFullPickleLoad": {
+          "type": "boolean",
+          "default": false,
+          "description": "Permit unsafe torch.load(weights_only=False) after explicit user consent. Disabled by default to prevent arbitrary code execution from malicious checkpoints. Still requires the workspace to be trusted."
         }
       }
     },
@@ -62,20 +67,24 @@
       {
         "command": "onnxInspector.openFile",
         "title": "ONNX Inspector: Open File"
+      },
+      {
+        "command": "onnxInspector.resetLoadConsent",
+        "title": "ONNX Inspector: Reset Load Consent"
       }
     ],
     "menus": {
       "explorer/context": [
         {
           "command": "onnxInspector.openFile",
-          "when": "resourceExtname == .onnx || resourceExtname == .pt || resourceExtname == .pth",
+          "when": "resourceExtname == .onnx || resourceExtname == .pt || resourceExtname == .pth || resourceExtname == .safetensors",
           "group": "navigation"
         }
       ],
       "editor/context": [
         {
           "command": "onnxInspector.openFile",
-          "when": "resourceExtname == .onnx || resourceExtname == .pt || resourceExtname == .pth",
+          "when": "resourceExtname == .onnx || resourceExtname == .pt || resourceExtname == .pth || resourceExtname == .safetensors",
           "group": "navigation"
         }
       ]
@@ -93,6 +102,9 @@
           },
           {
             "filenamePattern": "*.pth"
+          },
+          {
+            "filenamePattern": "*.safetensors"
           }
         ],
         "priority": "default"

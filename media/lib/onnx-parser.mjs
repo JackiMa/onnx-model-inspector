@@ -72,6 +72,7 @@ function summarizeModel(model, fileSizeBytes) {
     const estimatedParameterBytes = initializers.reduce((acc, item) => acc + (item.estimatedBytesKnown ? item.estimatedBytesValue : 0), 0);
 
     return {
+        format: 'onnx',
         summary: {
             graphName: graph.name || '',
             irVersion: formatBigInt(model.ir_version),

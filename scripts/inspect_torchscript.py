@@ -69,28 +69,59 @@ def _strip_to_code_relative(name):
     return None
 
 
-def _read_code_modules(zip_path):
-    """Return list of (rel_path, parsed_ast) for every code/*.py member.
+_CODE_MEMBER_MAX_BYTES = 8 * 1024 * 1024    # per-file hard cap
+_CODE_TOTAL_MAX_BYTES = 64 * 1024 * 1024    # aggregate cap across all code/*.py
+_CODE_MEMBER_MAX_COUNT = 4096               # zip bomb guard
 
-    ``rel_path`` is the path relative to the ``code/`` directory (e.g.
-    ``__torch__/torch/nn/modules/container.py``).
+
+def _read_code_modules(zip_path):
+    """Return (modules, cap_notices) for every code/*.py member.
+
+    ``modules`` is a list of ``(rel_path, parsed_ast)`` tuples. ``rel_path``
+    is the path relative to the ``code/`` directory (e.g.
+    ``__torch__/torch/nn/modules/container.py``). Enforces size caps on
+    individual members and aggregate bytes so a malicious archive cannot
+    push the subprocess into memory pressure before the Node-side timeout
+    fires. Any cap hits are returned via ``cap_notices`` so the caller can
+    force ``torchscript.partial = true`` with a visible warning rather
+    than silently returning a truncated graph.
     """
     out = []
+    cap_notices = []
+    total_bytes = 0
+    member_count = 0
     with zipfile.ZipFile(zip_path) as zf:
-        for name in zf.namelist():
-            rel = _strip_to_code_relative(name)
+        for info in zf.infolist():
+            rel = _strip_to_code_relative(info.filename)
             if rel is None:
                 continue
+            member_count += 1
+            if member_count > _CODE_MEMBER_MAX_COUNT:
+                cap_notices.append(
+                    f"Stopped scanning after {_CODE_MEMBER_MAX_COUNT} code/ members; archive may be truncated."
+                )
+                break
+            if info.file_size > _CODE_MEMBER_MAX_BYTES:
+                cap_notices.append(
+                    f"Skipped code/ member {info.filename!r} ({info.file_size} bytes) exceeds per-member cap of {_CODE_MEMBER_MAX_BYTES} bytes."
+                )
+                continue
+            if total_bytes + info.file_size > _CODE_TOTAL_MAX_BYTES:
+                cap_notices.append(
+                    f"Aggregate code/ bytes would exceed {_CODE_TOTAL_MAX_BYTES}; stopped at {total_bytes} bytes."
+                )
+                break
             try:
-                raw = zf.read(name)
+                raw = zf.read(info.filename)
             except KeyError:
                 continue
+            total_bytes += len(raw)
             try:
-                tree = ast.parse(raw, filename=name)
+                tree = ast.parse(raw, filename=info.filename)
             except SyntaxError:
                 continue
             out.append((rel, tree))
-    return out
+    return out, cap_notices
 
 
 def _dotted_name(node):
@@ -697,7 +728,7 @@ def build_payload(zip_path, partial_threshold=0.8):
         except Exception:
             detection = None
 
-    modules_parsed = _read_code_modules(zip_path)
+    modules_parsed, cap_notices = _read_code_modules(zip_path)
     if not modules_parsed:
         raise RuntimeError("no code/**/*.py members found in archive")
 
@@ -749,6 +780,11 @@ def build_payload(zip_path, partial_threshold=0.8):
                 f"recovery rate {rate:.2%} below threshold "
                 f"{partial_threshold:.0%}: {op_extracted}/{op_total} ops"
             )
+
+    # Any cap hits during zip scanning force partial + explain why.
+    if cap_notices:
+        partial_any = True
+        warnings.extend(cap_notices)
 
     # Tensor storage listing (offline — dtype/shape unknown)
     _, storage_keys = _count_storage_entries(zip_path)

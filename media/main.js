@@ -6,6 +6,13 @@ const vscode = typeof acquireVsCodeApi === 'function'
         setState() {}
     };
 
+const SUPPORTED_PARSED_FORMATS = new Set(['onnx', 'pt', 'safetensors']);
+const GRAPH_ARIA_LABELS = {
+    onnx: 'ONNX graph visualization',
+    pt: 'PyTorch module hierarchy',
+    safetensors: 'Safetensors tensor layout'
+};
+
 const persisted = vscode.getState() || {};
 const state = {
     activeTab: persisted.activeTab || 'overview',
@@ -105,6 +112,13 @@ document.addEventListener('click', (event) => {
             const text = actionElement.dataset.text || '';
             if (text) {
                 vscode.postMessage({ command: 'copyText', payload: { text } });
+            }
+            break;
+        }
+        case 'copy-onnx-export-snippet': {
+            const snippet = actionElement.dataset.snippet || '';
+            if (snippet) {
+                vscode.postMessage({ command: 'copyToClipboard', payload: { text: snippet } });
             }
             break;
         }
@@ -506,11 +520,20 @@ function getCombinedMetadataEntries(parsed) {
 }
 
 function detectParsedFormat(parsed) {
-    return parsed?.format === 'pt' ? 'pt' : 'onnx';
+    const format = parsed?.format;
+    return SUPPORTED_PARSED_FORMATS.has(format) ? format : 'unknown';
 }
 
 function isPtModel(parsed) {
     return detectParsedFormat(parsed) === 'pt';
+}
+
+function isTensorBasedFormat(format) {
+    return format === 'pt' || format === 'safetensors';
+}
+
+function graphAriaLabelFor(format) {
+    return GRAPH_ARIA_LABELS[format] || 'Model graph';
 }
 
 function syncGraphSelectionToSearch() {
@@ -691,6 +714,10 @@ function renderTabs() {
 }
 
 function renderActiveTab(parsed) {
+    const format = detectParsedFormat(parsed);
+    if (format === 'unknown') {
+        return renderUnsupportedFormatCard(parsed);
+    }
     switch (state.activeTab) {
         case 'graph':
             return renderGraphTab(parsed);
@@ -702,6 +729,16 @@ function renderActiveTab(parsed) {
         default:
             return renderOverviewTab(parsed);
     }
+}
+
+function renderUnsupportedFormatCard(parsed) {
+    const observed = parsed?.format ? String(parsed.format) : 'none';
+    return `
+        <div class="panel-card">
+            <h2>Unsupported model format</h2>
+            <div class="subtle-meta">The document reported format "${escapeHtml(observed)}", which this inspector does not know how to render. Supported formats are ONNX (.onnx), PyTorch (.pt / .pth), and safetensors (.safetensors).</div>
+        </div>
+    `;
 }
 
 function renderOverviewTab(parsed) {
@@ -729,6 +766,7 @@ function renderOverviewTab(parsed) {
                 <div class="kv-grid">
                     ${renderKvCard('Graph name', summary.graphName || '—')}
                     ${renderKvCard('Producer', producer || '—')}
+                    ${(parsed.subFormat || summary.subFormat) ? renderKvCard('Sub-format', parsed.subFormat || summary.subFormat) : ''}
                     ${renderKvCard('Domain', summary.domain || '—')}
                     ${renderKvCard('Model version', summary.modelVersion || '—')}
                     ${renderKvCard('IR version', `${summary.irVersion || '—'}${summary.irVersionLabel ? ` · ${summary.irVersionLabel}` : ''}`)}
@@ -833,19 +871,77 @@ function renderMetadataPreview(parsed) {
     `;
 }
 
+const ONNX_EXPORT_WIZARD_SUBFORMATS = new Set([
+    'plain-state-dict',
+    'full-model-pickle',
+    'lightning-checkpoint',
+    'optimizer-checkpoint'
+]);
+
+function renderOnnxExportWizard(parsed) {
+    const subFormat = parsed?.subFormat || parsed?.summary?.subFormat || '';
+    const snippet = `import torch
+
+# 1. instantiate your model class (the extension cannot do this for you)
+model = YourModelClass()
+model.load_state_dict(torch.load('your_ckpt.pt', weights_only=True))
+model.eval()
+
+# 2. build a dummy input with the right shape for your model
+dummy = torch.randn(1, 3, 224, 224)
+
+# 3. export (dynamo=True is the recommended path on PyTorch >= 2.5)
+torch.onnx.export(model, dummy, 'model.onnx', dynamo=True)
+
+# 4. open model.onnx back in this extension for a real graph`;
+    const encoded = escapeAttribute(snippet);
+    return `
+        <div class="panel-card onnx-export-wizard">
+            <h2>Weights only · no forward graph</h2>
+            <div class="subtle-meta">Detected sub-format: <code>${escapeHtml(subFormat || 'unknown')}</code>. This file stores tensors but no computation graph. The view below shows the module hierarchy inferred from tensor names. For a real operator-level graph, export to ONNX:</div>
+            <pre class="code-snippet"><code>${escapeHtml(snippet)}</code></pre>
+            <div class="wizard-actions">
+                <button class="secondary-button" data-action="copy-onnx-export-snippet" data-snippet="${encoded}">Copy export snippet</button>
+                <span class="subtle-meta">Then open the generated <code>.onnx</code> file in this extension.</span>
+            </div>
+        </div>
+    `;
+}
+
+function renderTorchscriptPartialBanner(parsed) {
+    const ts = parsed?.torchscript;
+    if (!ts) return '';
+    if (!ts.partial && !ts.warnings?.length) return '';
+    const warningItems = (ts.warnings || []).map((w) => `<li>${escapeHtml(w)}</li>`).join('');
+    return `
+        <div class="panel-card ts-partial-banner">
+            <h2>Partial TorchScript graph</h2>
+            <div class="subtle-meta">Recovered ${ts.opCountExtracted} of ~${ts.opCountTotal} operators (${Math.round(100 * ts.opCountExtracted / Math.max(1, ts.opCountTotal))}%). Unparsed ops usually live inside control flow or dynamic dispatch. The graph below is best-effort.</div>
+            ${warningItems ? `<ul class="insight-warnings">${warningItems}</ul>` : ''}
+        </div>
+    `;
+}
+
 function renderGraphTab(parsed) {
     const format = detectParsedFormat(parsed);
-    if (format === 'pt') {
+    const graphView = parsed.graphView;
+    const nodes = graphView?.displayNodes || [];
+    const subFormat = parsed?.subFormat || parsed?.summary?.subFormat || '';
+    const wizardMarkup = (isTensorBasedFormat(format) && ONNX_EXPORT_WIZARD_SUBFORMATS.has(subFormat))
+        ? renderOnnxExportWizard(parsed)
+        : '';
+    const bannerMarkup = renderTorchscriptPartialBanner(parsed);
+    if (format === 'pt' && nodes.length === 0) {
         return `
+            ${wizardMarkup}
+            ${bannerMarkup}
             <div class="panel-card pt-graph-placeholder">
-                <h2>Graph view unavailable for PT checkpoints</h2>
-                <div class="subtle-meta">V1 PT support is summary-only. Use Metadata and I/O & Weights to inspect sections, tensors, and scalar values.</div>
+                <h2>No tensors to visualize</h2>
+                <div class="subtle-meta">This checkpoint does not contain any tensors, so no module hierarchy could be inferred. Use Metadata and I/O & Weights to inspect sections and scalar values.</div>
             </div>
         `;
     }
 
-    const graphView = parsed.graphView;
-    const nodes = graphView.displayNodes || [];
     const query = state.graphSearch.trim().toLowerCase();
     const resultNodes = query
         ? nodes.filter((node) => searchableNodeText(node).includes(query))
@@ -857,6 +953,8 @@ function renderGraphTab(parsed) {
         || null;
 
     return `
+        ${wizardMarkup}
+        ${bannerMarkup}
         <div class="graph-layout">
             <div class="sidebar-card">
                 <h2>Graph search</h2>
@@ -969,7 +1067,16 @@ function renderGraphSelectionDetails(node, parsed) {
         const embeddedConstants = details.embeddedConstants || [];
         const dataInputs = details.dataInputs || [];
         const outputs = details.outputInfos || (details.outputs || []).map((name, index) => ({ index, name, typeSummary: '' }));
-        const insightMarkup = renderOperatorInsight(details);
+        const format = detectParsedFormat(parsed);
+        const subFormat = parsed?.subFormat || parsed?.summary?.subFormat || '';
+        let insightMarkup;
+        if (subFormat === 'torchscript' && details?.inputs && details?.outputs) {
+            insightMarkup = renderTorchScriptOpInsight(details);
+        } else if (isTensorBasedFormat(format)) {
+            insightMarkup = renderPtModuleInsight(details);
+        } else {
+            insightMarkup = renderOperatorInsight(details);
+        }
         return `
             <div class="detail-group">
                 <div class="detail-header-row">
@@ -1125,6 +1232,79 @@ function setSectionScopeExpanded(scope, expanded) {
         }
     });
     persistUiState();
+}
+
+function renderTorchScriptOpInsight(details) {
+    const callee = details.callee || details.opType || 'op';
+    const opType = details.opType || callee;
+    const inputs = Array.isArray(details.inputs) ? details.inputs : [];
+    const outputs = Array.isArray(details.outputs) ? details.outputs : [];
+    const inputItems = inputs.length
+        ? inputs.map((n) => `<li><span class="monospace">${escapeHtml(n)}</span></li>`).join('')
+        : '<li class="subtle-meta">No inputs recorded.</li>';
+    const outputItems = outputs.length
+        ? outputs.map((n) => `<li><span class="monospace">${escapeHtml(n)}</span></li>`).join('')
+        : '<li class="subtle-meta">No outputs recorded.</li>';
+    const inPlaceBadge = details.inPlace ? '<span class="confidence-badge confidence-medium">in-place</span>' : '';
+    const module = details.module || '(root)';
+    const sourceLine = details.sourceLine ? `Source line ${details.sourceLine}` : '';
+    return `
+        <div class="insight-card">
+            <div class="insight-title">TorchScript op: ${escapeHtml(opType)} ${inPlaceBadge}</div>
+            <div class="insight-description">Extracted from the archive's <code>code/*.py</code> source via the standard AST parser. Callee: <code>${escapeHtml(callee)}</code>.</div>
+            <div class="insight-meta-row monospace">module: ${escapeHtml(module)}${sourceLine ? ` · ${escapeHtml(sourceLine)}` : ''}</div>
+            <div class="insight-section-label">Inputs (SSA names)</div>
+            <ul class="insight-bullets">${inputItems}</ul>
+            <div class="insight-section-label">Outputs (SSA names)</div>
+            <ul class="insight-bullets">${outputItems}</ul>
+            <div class="subtle-meta">Edges in the graph follow use-def of these variables. Tensor shapes are not available offline without torch.</div>
+        </div>
+    `;
+}
+
+function renderPtModuleInsight(details) {
+    const opType = details.opType || 'Module';
+    const modulePath = details.modulePath || details.displayName || '';
+    const confidence = details.confidence || 'medium';
+    const warnings = Array.isArray(details.inferenceWarnings) ? details.inferenceWarnings : [];
+    const parameters = Array.isArray(details.parameters) ? details.parameters : [];
+    const parameterList = parameters.length
+        ? parameters.map((param) => `<li><span class="monospace">${escapeHtml(param.name)}</span>: ${escapeHtml(param.shapeLabel || '')} ${escapeHtml(param.dataTypeName || '')}</li>`).join('')
+        : '<li class="subtle-meta">No parameters in this module.</li>';
+    const explainer = {
+        Linear: 'Dense / fully-connected layer. weight shape is [out_features, in_features]; bias (if present) is [out_features].',
+        Conv1d: 'Temporal convolution. weight shape is [out_channels, in_channels/groups, kernel_size].',
+        Conv2d: 'Spatial convolution. weight shape is [out_channels, in_channels/groups, kH, kW]. Groups (e.g. depthwise) cannot be recovered from a state_dict alone.',
+        Conv3d: 'Volumetric convolution. weight shape is [out_channels, in_channels/groups, kD, kH, kW].',
+        DepthwiseConv2d: 'Per-channel convolution. weight.shape[1] == 1 is the depthwise signature; exact groups count cannot be recovered from a state_dict.',
+        BatchNorm: 'Normalizes over the batch dimension. running_mean and running_var are buffers populated during training.',
+        LayerNorm: 'Normalizes across the feature dimension. Uses weight (gamma) and bias (beta) only; no running statistics.',
+        GroupNorm: 'Normalizes over groups of channels. Same parameter layout as LayerNorm in a state_dict.',
+        InstanceNorm: 'Per-instance normalization. Detected by module name hint; state_dict alone cannot confirm.',
+        Embedding: 'Lookup table. weight shape is [num_embeddings, embedding_dim]. No bias.',
+        MultiheadAttention: 'Stacked in_proj + out_proj. A single in_proj_weight carries Q/K/V; out_proj is a separate linear.',
+        AttentionBlock: 'Attention with separate q_proj / k_proj / v_proj sub-modules; often found in HuggingFace-style architectures.',
+        LSTM: 'Recurrent cell with 4×hidden gates. weight_ih_l{N}/weight_hh_l{N} naming convention.',
+        GRU: 'Recurrent cell with 3×hidden gates.',
+        RNN: 'Vanilla recurrent cell.',
+        Parameter: 'Single parameter tensor. Does not match a standard layer signature.',
+        Module: 'Container module (no parameters at this level — children carry the weights).'
+    }[opType] || 'Layer type inferred from parameter shapes.';
+    const confidenceBadge = `<span class="confidence-badge confidence-${escapeAttribute(confidence)}">${escapeHtml(confidence)} confidence</span>`;
+    const warningList = warnings.length
+        ? `<ul class="insight-warnings">${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`
+        : '';
+    return `
+        <div class="insight-card">
+            <div class="insight-title">Inferred layer: ${escapeHtml(opType)} ${confidenceBadge}</div>
+            <div class="insight-description">${escapeHtml(explainer)}</div>
+            <div class="insight-meta-row monospace">${escapeHtml(modulePath || '(unnamed module)')}</div>
+            ${warningList}
+            <div class="insight-section-label">Parameters</div>
+            <ul class="insight-bullets">${parameterList}</ul>
+            <div class="subtle-meta">This checkpoint file does not carry a forward computation graph. The layer type above is a static inference from parameter shapes and sibling names; it may be wrong for custom modules.</div>
+        </div>
+    `;
 }
 
 function renderOperatorInsight(details) {
@@ -1543,6 +1723,7 @@ function renderRelatedNodeButtons(nodes, emptyLabel) {
 function renderGraphSvg(parsed, selectedNodeId, query) {
     const graphView = parsed.graphView;
     const { positions, width, height, routedEdges = {} } = graphView.layout;
+    const ariaLabel = graphAriaLabelFor(detectParsedFormat(parsed));
     const matchingIds = new Set(
         query
             ? graphView.displayNodes.filter((node) => searchableNodeText(node).includes(query)).map((node) => node.id)
@@ -1596,7 +1777,7 @@ function renderGraphSvg(parsed, selectedNodeId, query) {
 
     return `
         <div class="graph-canvas" id="graph-canvas" data-base-width="${width}" data-base-height="${height}">
-            <svg class="graph-svg" id="graph-svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="ONNX graph visualization">
+            <svg class="graph-svg" id="graph-svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="${escapeAttribute(ariaLabel)}">
                 <defs>
                     <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="strokeWidth">
                         <path d="M 0 0 L 10 4 L 0 8 z" class="graph-arrow"></path>

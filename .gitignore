@@ -9,3 +9,16 @@ Thumbs.db
 
 # User test models (keep test/sample.onnx for tests)
 /*.onnx
+
+# Performance baseline cache (machine-specific)
+.perf-cache/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Codex / session scratch
+.context/
+
+# Optional large fixtures for perf gating
+test/fixtures/large.onnx
