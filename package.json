@@ -2,7 +2,7 @@
   "name": "onnx-model-inspector",
   "displayName": "ONNX Model Inspector",
   "description": "Open ONNX, PyTorch (.pt / .pth / TorchScript), and safetensors model files in a self-contained graph, metadata, and tensor inspector for VS Code and Cursor.",
-  "version": "6.1.1",
+  "version": "0.6.1",
   "publisher": "gema",
   "license": "MIT",
   "engines": {

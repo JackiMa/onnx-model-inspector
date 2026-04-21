@@ -1,17 +1,17 @@
 # ONNX Model Inspector
 
-> A self-contained ONNX viewer for VS Code and Cursor. Zero dependencies — install and go.
+> Inspect ONNX, PyTorch, and safetensors model files directly in VS Code and Cursor — no external services, no cloud uploads.
 
-Open `.onnx`, `.pt`, and `.pth` files in a custom read-only editor with four coordinated views:
+Open `.onnx`, `.pt`, `.pth`, and `.safetensors` files in a custom read-only editor with four coordinated views:
 
-| View | ONNX | PT / PTH |
-|------|------|----------|
-| **Overview** | Model identity, opsets, counts, file/export timestamps, quick metadata preview | Checkpoint root type, tensor counts, section counts, scalar metadata preview |
-| **Graph** | Vertical Netron-inspired operator flow with embedded parameters, search, zoom, pan | V1 placeholder explaining that checkpoint graph rendering is not supported yet |
-| **Metadata** | Model-level and graph-level `metadata_props` with pretty JSON + raw values | Checkpoint sections and scalar metadata extracted from the container |
-| **I/O & Weights** | Inputs, outputs, value info, and initializer summaries | Tensor summaries plus discovered checkpoint sections |
+| View | ONNX | PT / TorchScript | safetensors |
+|------|------|-----------------|-------------|
+| **Overview** | Model identity, opsets, counts, export timestamps | Checkpoint root type, tensor counts, scalar metadata | Header metadata, tensor count, total parameter size |
+| **Graph** | Vertical operator flow with embedded parameters | Module hierarchy tree (state dict) or operator DAG (TorchScript) | Tensor list |
+| **Metadata** | `metadata_props` with pretty JSON + raw values | Checkpoint sections and scalar metadata | Header `__metadata__` dict |
+| **I/O & Weights** | Inputs, outputs, initializer summaries | Tensor summaries and checkpoint sections | Tensor dtype, shape, and offset summaries |
 
-For ONNX, there is no Python runtime dependency. For PT / PTH inspection, the extension shells out to a local Python + PyTorch runtime when available.
+For ONNX, there is no Python runtime dependency. For PT / PTH / safetensors inspection, the extension shells out to a bundled Python helper.
 
 > **Cursor users:** This extension is available on [Open VSX](https://open-vsx.org/extension/gema/onnx-model-inspector). You can also install directly from a `.vsix` file.
 
@@ -21,29 +21,35 @@ Cursor uses the Open VSX registry and does not always surface every VS Code Mark
 
 ## What is included
 
-- Custom read-only editor that automatically opens `*.onnx`, `*.pt`, and `*.pth`
-- Bundled ONNX protobuf decoding and summarization logic
-- PT / PTH checkpoint summarization through a local Python helper when PyTorch is installed
+- Custom read-only editor that automatically opens `*.onnx`, `*.pt`, `*.pth`, and `*.safetensors`
+- Bundled ONNX protobuf decoding and summarization — no Python needed for ONNX
+- Bundled Python helpers for PT, TorchScript, and safetensors inspection (requires Python; PyTorch only needed for PT files)
+- Format auto-detection: classifies PT archives as plain-state-dict, TorchScript, lightning-checkpoint, exported-program, or full-model-pickle before loading anything
+- TorchScript **offline** computation-graph extraction: parses the generated IR source with the standard `ast` module (no `torch` runtime required), renders a real operator DAG with layered layout
+- Module hierarchy graph for plain state-dict checkpoints with layer type inference (Conv2d, Linear, MultiheadAttention, AttentionBlock, BatchNorm, LayerNorm, GroupNorm, DepthwiseConv2d...)
+- safetensors header inspection with pure Python standard library (no third-party packages needed)
 - Vertical layered graph layout with routed edges, smaller simple-op cards, and a Netron-inspired operator-card style
 - Embedded weight / initializer rows inside operators instead of a sparse cloud of standalone parameter nodes
 - Graph search by node name, op type, tensor terminal, embedded parameter name, or folded Constant-helper provenance
-- Stable selection behavior: graph clicks inspect only and preserve the current camera, while left-side result clicks and **Reveal in graph** explicitly recenter the viewport
+- Stable selection behavior: graph clicks inspect only and preserve the current camera; left-side result clicks and **Reveal in graph** explicitly recenter the viewport
 - Background drag-to-pan, **Ctrl + wheel** zoom, zoom slider, reset, and fit controls
 - Pretty JSON metadata tree with field-level syntax highlighting, expand-all / collapse-all controls, and raw-value comparison
 - File and export metadata surfacing, including detected generated / exported timestamps when present in ONNX metadata
-- Operator insight cards in the right-side detail pane, including activation function plots, clearer plain-language explanations, shape before/after summaries, and remembered collapsible sections
-- Weight / initializer summaries including shape, element count, estimated byte size, and storage mode
+- Operator insight cards in the right-side detail pane, including activation function plots and plain-language explanations
 - Offline packaging scripts for both `.vsix` and a source archive
-- Publish notes for VS Code Marketplace and Open VSX
+
+## Safety
+
+- PyTorch `.pt` files are opened with `weights_only=True` by default. Unsafe pickle deserialization (which can execute arbitrary code) is disabled unless you explicitly:
+  1. Trust the workspace in VS Code
+  2. Enable `onnxInspector.allowFullPickleLoad` in settings
+  3. Confirm the one-time per-file warning dialog
+- Python subprocesses run under a 120-second hard timeout and a 16 MB stdout cap
+- Files larger than 500 MB skip the webview-payload read; the Python inspector reads directly from disk
 
 ## Installation
 
-### From Marketplace (VS Code)
-
-1. Open the Extensions view and search for **ONNX Model Inspector**.
-2. Click **Install**.
-
-### From Open VSX (Cursor)
+### From Open VSX (Cursor / VS Code)
 
 1. Open the Extensions view and search for **ONNX Model Inspector**.
 2. Click **Install**.
@@ -52,83 +58,97 @@ Cursor uses the Open VSX registry and does not always surface every VS Code Mark
 
 1. Download the `.vsix` from [GitHub Releases](https://github.com/JackiMa/onnx-model-inspector/releases).
 2. In VS Code / Cursor: Extensions view → `...` → **Install from VSIX...** → select the file.
-3. Open any `.onnx` file.
+3. Open any `.onnx`, `.pt`, `.pth`, or `.safetensors` file.
+
+## Requirements
+
+| Format | Python | PyTorch |
+|--------|--------|---------|
+| ONNX | Not required | Not required |
+| safetensors | Required | Not required |
+| PT / TorchScript (graph only) | Required | Not required |
+| PT (weights / metadata) | Required | Required |
+
+Point the extension at a specific interpreter with `onnxInspector.pythonPath`. If empty, it falls back to `ONNX_INSPECTOR_PYTHON`, `CONDA_PYTHON_EXE`, then `python3` / `py -3`.
 
 ## Usage
 
 ### Open a model
 
-- Double-click any `.onnx`, `.pt`, or `.pth` file in the Explorer.
+- Double-click any `.onnx`, `.pt`, `.pth`, or `.safetensors` file in the Explorer.
 - Or run **ONNX Inspector: Open File** from the Command Palette.
 
 ### Work with the Graph tab
 
-- The graph now reads **top to bottom**, closer to Netron’s default mental model.
-- Weight and bias tensors that are initializer-backed show up as **embedded rows inside operator cards**.
-- Search by node name, operator type, tensor terminal, or embedded parameter name such as `bias`, `weight`, or a full tensor name.
-- Small helper `Constant` nodes such as `axes` inputs are automatically **folded into the consuming operator** when they are single-use and safe to inline.
-- The right-hand detail pane explains common operators directly. For activations such as **ELU**, it can draw the operator's function curve so the transformation is easier to understand at a glance.
-- Click a search result to smoothly reveal it from the current viewport.
-- Click a node in the graph canvas to inspect it **without** forcing a viewport jump.
-- Use **Ctrl + mouse wheel** to zoom.
-- Drag the graph background to pan.
+- The graph reads **top to bottom**, closer to Netron's default mental model.
+- For TorchScript archives, the graph shows a real **operator DAG** extracted offline from the IR source — no `torch` runtime needed.
+- For plain state-dict checkpoints, the graph shows a **module hierarchy tree** with inferred layer types.
+- For ONNX, weight and bias tensors that are initializer-backed show up as **embedded rows inside operator cards**.
+- Search by node name, operator type, tensor terminal, or embedded parameter name.
+- Small helper `Constant` nodes are automatically **folded into the consuming operator** when single-use.
+- Click a search result to smoothly reveal it. Click a node in the canvas to inspect it without forcing a viewport jump.
+- Use **Ctrl + mouse wheel** to zoom. Drag the background to pan.
 - Use the right-side zoom overlay for **+ / − / 100% / Fit** and the zoom slider.
-- Use the **Reveal in graph** button in the detail pane when you explicitly want to re-center.
+- Use the **Reveal in graph** button in the detail pane when you want to re-center.
 - Inspect direct **Upstream** and **Downstream** neighbors from the detail pane.
-- Expand or collapse detail sections on the right; the inspector remembers your preferred section layout. Toolbar guidance for **Reveal in graph**, **Expand all**, and **Collapse all** now appears as hover tooltips instead of taking vertical space.
 
 ### Work with the Metadata tab
 
 - Search metadata keys and values.
-- If a value parses as JSON, the extension shows:
-  1. an interactive pretty JSON tree
-  2. the original raw stored string
+- If a value parses as JSON, the extension shows an interactive pretty JSON tree alongside the original raw string.
 - Use **Expand all** and **Collapse all** for large JSON payloads.
 - Copy either the raw value or the pretty JSON rendering.
 
 ### Review export and file timestamps
 
-The Overview tab now surfaces:
+The Overview tab surfaces:
 
-- detected ONNX export / generated timestamps from metadata fields when present
-- file created time
-- file modified time
-- last reload time
-- file size
-
-This is useful when you are verifying which artifact actually made it into a deployment bundle.
+- Detected ONNX export / generated timestamps from metadata when present
+- File created and modified times
+- Last reload time and file size
 
 ### Refresh after regenerating a model
 
-Use the **Reload** button in the editor header to re-read the ONNX file from disk.
+Use the **Reload** button in the editor header to re-read the file from disk.
 
 ## Commands
 
-- `ONNX Inspector: Open File`
+| Command | Description |
+|---------|-------------|
+| `ONNX Inspector: Open File` | Pick a model file to open in the inspector |
+| `ONNX Inspector: Reset Load Consent` | Clear saved per-file consent for unsafe pickle loads |
+
+## Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `onnxInspector.pythonPath` | `""` | Path to the Python interpreter. Leave empty to auto-discover. |
+| `onnxInspector.allowFullPickleLoad` | `false` | Allow unsafe pickle deserialization for PT checkpoints that fail `weights_only=True`. Requires workspace trust and per-file confirmation. |
 
 ## How it works
 
-At a high level:
-
-1. The extension registers a **custom readonly editor** for `*.onnx`, `*.pt`, and `*.pth`.
-2. When a model is opened, the extension host reads the raw bytes and basic file stats.
-3. For ONNX files, a bundled parser decodes the ONNX protobuf payload locally.
-4. For PT / PTH files, a bundled Python helper invokes local PyTorch to summarize checkpoint structure and tensor entries.
-5. The extension derives a serializable inspection model containing summary fields, metadata/sections, tensor summaries, and graph data when the source format supports it.
-6. The webview renders the inspection model with no external network calls.
-
-PT support in this V1 is intentionally summary-only: it does not render an execution graph and depends on a local Python + PyTorch runtime.
+1. The extension registers a **custom readonly editor** for `*.onnx`, `*.pt`, `*.pth`, and `*.safetensors`.
+2. When a model is opened, the extension host reads basic file stats and routes to the right parser.
+3. For ONNX files, a bundled parser decodes the protobuf payload locally in the webview — no subprocess.
+4. For PT files, a bundled `detect_format.py` classifies the archive, then the appropriate inspector (`inspect_pt.py` or `inspect_torchscript.py`) runs as a subprocess.
+5. For safetensors files, `inspect_safetensors.py` reads the 8-byte header length and parses the JSON header — no third-party packages.
+6. The extension derives a serializable inspection model containing summary fields, metadata, tensor summaries, and graph data.
+7. The webview renders the inspection model with no external network calls.
 
 More detail is available in [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md).
 
 ## Project layout
 
 - `extension.js` — extension entrypoint and custom editor provider
+- `model-parser.js` — format detection, subprocess orchestration, graph-view builders
 - `media/main.js` — webview UI logic
 - `media/styles.css` — webview styling
 - `media/lib/` — bundled ONNX parser modules and graph layout runtime
+- `scripts/detect_format.py` — classifies PT archives without deserialization
+- `scripts/inspect_pt.py` — PT checkpoint inspector (requires PyTorch)
+- `scripts/inspect_torchscript.py` — TorchScript offline graph extractor (stdlib only)
+- `scripts/inspect_safetensors.py` — safetensors header reader (stdlib only)
 - `scripts/package_vsix.py` — offline VSIX packager
-- `scripts/package_source_zip.py` — offline source archive packager
 - `docs/` — installation, architecture, and publishing notes
 
 ## Packaging a new VSIX
@@ -139,26 +159,18 @@ python3 ./scripts/package_vsix.py
 
 Output goes to `dist/` by default.
 
-## Packaging a source archive
-
-```bash
-python3 ./scripts/package_source_zip.py
-```
-
 ## Publishing
 
-See [`docs/INSTALL_AND_PUBLISH.md`](docs/INSTALL_AND_PUBLISH.md) for VS Code Marketplace, Open VSX, and GitHub Release workflows.
+See [`docs/INSTALL_AND_PUBLISH.md`](docs/INSTALL_AND_PUBLISH.md) for Open VSX and GitHub Release workflows.
 
 ## Limitations
 
 - The editor is intentionally **read-only**.
-- The graph renderer is strongly inspired by Netron, but it is still **not a full Netron clone**.
-- External tensor files are surfaced as references in initializer metadata, but this extension does not open or merge external weight files.
+- The graph renderer is strongly inspired by Netron but is not a full Netron clone.
+- External tensor files are surfaced as references in initializer metadata; the extension does not open or merge external weight files.
 - Weight contents are summarized rather than dumped in full.
-- Temporal metadata detection works from stored metadata fields and file system stats; if the model simply does not store an export time, the inspector cannot infer the exact original generation moment.
-- PT / PTH support requires a local Python environment with PyTorch installed.
-- PT / PTH support is summary-only in V1: the extension shows sections, scalar metadata, and tensor summaries, but not a rendered computation graph.
-- You can point the extension at a specific Python interpreter with the `onnxInspector.pythonPath` setting. If left empty, the extension falls back to `ONNX_INSPECTOR_PYTHON`, `CONDA_PYTHON_EXE`, then `python3`.
+- PT files with `weights_only=True` failures require explicit consent, workspace trust, and the `allowFullPickleLoad` setting to proceed.
+- TorchScript graph extraction is AST-based: complex control flow and some dynamic dispatch patterns may not be fully recovered (a "Partial TorchScript graph" banner appears when this happens).
 
 ## License
 
